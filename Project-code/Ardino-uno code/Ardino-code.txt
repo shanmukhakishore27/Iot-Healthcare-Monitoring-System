@@ -1,0 +1,445 @@
+#include <Wire.h>
+#include <ESP8266WiFi.h>
+#include <FirebaseESP8266.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_BMP280.h>
+#include "MAX30105.h"
+#include "heartRate.h"
+#include <time.h>
+#define WIFI_SSID "ShanmukhaKishore"
+#define WIFI_PASSWORD "Shannu"
+#define FIREBASE_HOST "health-25-default-rtdb.firebaseio.com"
+#define FIREBASE_AUTH "YOUR_FIREBASE_SECRET"
+#define STATUS_LED_PIN D4
+#define UPDATE_INTERVAL 10000
+#define MAX_WIFI_RETRIES 5
+#define SENSOR_TIMEOUT 3000
+FirebaseData fbdo;
+FirebaseConfig config;
+FirebaseAuth auth;
+Adafruit_BMP280 bmp;
+MAX30105 particleSensor;
+struct HealthData
+{
+    float heartRate = NAN;
+    float spo2 = NAN;
+    float airTemperature = NAN;
+    float airPressure = NAN;
+    time_t timestamp = 0;
+};
+
+HealthData currentData;
+enum SystemState
+{
+    STATE_INIT,
+    STATE_READ_SENSORS,
+    STATE_UPLOAD_DATA,
+    STATE_ERROR
+};
+
+SystemState currentState = STATE_INIT;
+unsigned long lastUpdateTime = 0;
+unsigned long stateEntryTime = 0;
+void initHardware();
+
+bool initWiFi();
+bool initFirebase();
+bool initSensors();
+
+void readSensorData();
+void readAirData();
+void readHeartRateSpO2();
+
+bool checkForBeat(long irValue);
+
+bool isDataValid();
+bool uploadToFirebase();
+
+void changeState(SystemState newState);
+
+const char *stateToString(SystemState state);
+
+void handleInitState();
+void handleReadSensorsState();
+void handleUploadDataState();
+void handleErrorState();
+void setup()
+{
+    Serial.begin(115200);
+
+    initHardware();
+
+    changeState(STATE_INIT);
+}
+void loop()
+{
+    switch (currentState)
+    {
+    case STATE_INIT:
+        handleInitState();
+        break;
+
+    case STATE_READ_SENSORS:
+        handleReadSensorsState();
+        break;
+
+    case STATE_UPLOAD_DATA:
+        handleUploadDataState();
+        break;
+
+    case STATE_ERROR:
+        handleErrorState();
+        break;
+    }
+}
+void changeState(SystemState newState)
+{
+    currentState = newState;
+    stateEntryTime = millis();
+
+    Serial.print("State changed to : ");
+    Serial.println(stateToString(newState));
+}
+
+const char *stateToString(SystemState state)
+{
+    switch (state)
+    {
+    case STATE_INIT:
+        return "INIT";
+
+    case STATE_READ_SENSORS:
+        return "READ_SENSORS";
+
+    case STATE_UPLOAD_DATA:
+        return "UPLOAD_DATA";
+
+    case STATE_ERROR:
+        return "ERROR";
+
+    default:
+        return "UNKNOWN";
+    }
+}
+void handleInitState()
+{
+    static bool wifiConnected = false;
+    static bool firebaseConnected = false;
+    static bool sensorsReady = false;
+
+    if (!wifiConnected)
+    {
+        if (initWiFi())
+        {
+            wifiConnected = true;
+            Serial.println("WiFi connected");
+        }
+        else if (millis() - stateEntryTime > 30000)
+        {
+            changeState(STATE_ERROR);
+            return;
+        }
+    }
+
+    if (wifiConnected && !firebaseConnected)
+    {
+        if (initFirebase())
+        {
+            firebaseConnected = true;
+            Serial.println("Firebase connected");
+        }
+    }
+
+    if (wifiConnected && !sensorsReady)
+    {
+        if (initSensors())
+        {
+            sensorsReady = true;
+            Serial.println("Sensors ready");
+        }
+    }
+
+    if (wifiConnected && firebaseConnected && sensorsReady)
+    {
+        changeState(STATE_READ_SENSORS);
+    }
+}
+
+void handleReadSensorsState()
+{
+    readSensorData();
+
+    if (isDataValid())
+    {
+        currentData.timestamp = time(nullptr);
+        changeState(STATE_UPLOAD_DATA);
+    }
+    else
+    {
+        Serial.println("Invalid sensor data, retrying...");
+
+        if (millis() - stateEntryTime > 5000)
+        {
+            changeState(STATE_ERROR);
+        }
+    }
+}
+
+void handleUploadDataState()
+{
+    if (uploadToFirebase())
+    {
+        Serial.println("Data uploaded successfully");
+
+        lastUpdateTime = millis();
+
+        changeState(STATE_READ_SENSORS);
+    }
+    else
+    {
+        Serial.println("Upload failed");
+
+        if (millis() - stateEntryTime > 10000)
+        {
+            changeState(STATE_ERROR);
+        }
+    }
+}
+
+void handleErrorState()
+{
+    digitalWrite(STATUS_LED_PIN, HIGH);
+
+    Serial.println("System in ERROR state");
+
+    delay(5000);
+
+    ESP.restart();
+}
+void initHardware()
+{
+    pinMode(STATUS_LED_PIN, OUTPUT);
+
+    digitalWrite(STATUS_LED_PIN, HIGH);
+
+    Wire.begin();
+}
+bool initWiFi()
+{
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+    int attempts = 0;
+
+    while (WiFi.status() != WL_CONNECTED &&
+           attempts < MAX_WIFI_RETRIES)
+    {
+        delay(500);
+        Serial.print(".");
+        attempts++;
+    }
+
+    if (WiFi.status() == WL_CONNECTED)
+    {
+        configTime(0, 0,
+                   "pool.ntp.org",
+                   "time.nist.gov");
+        return true;
+    }
+
+    return false;
+}
+bool initFirebase()
+{
+    config.host = FIREBASE_HOST;
+    config.signer.tokens.legacy_token = FIREBASE_AUTH;
+    Firebase.reconnectWiFi(true);
+    Firebase.begin(&config, &auth);
+    return Firebase.ready();
+}
+bool initSensors()
+{
+    unsigned long startTime = millis();
+
+    bool bmpReady = false;
+    bool maxReady = false;
+
+    while (millis() - startTime < SENSOR_TIMEOUT)
+    {
+        if (!bmpReady && bmp.begin(0x76))
+        {
+            bmpReady = true;
+            Serial.println("BMP280 Ready");
+        }
+        if (!maxReady &&
+            particleSensor.begin(Wire, I2C_SPEED_FAST))
+        {
+            particleSensor.setup();
+
+            particleSensor.setPulseAmplitudeRed(0x1F);
+            particleSensor.setPulseAmplitudeGreen(0);
+
+            particleSensor.enableDIETEMPRDY();
+
+            maxReady = true;
+
+            Serial.println("MAX30102 Ready");
+        }
+
+        if (bmpReady && maxReady)
+        {
+            digitalWrite(STATUS_LED_PIN, LOW);
+
+            return true;
+        }
+
+        delay(100);
+    }
+
+    return false;
+}
+void readSensorData()
+{
+    readAirData();
+    readHeartRateSpO2();
+}
+void readAirData()
+{
+    currentData.airTemperature = bmp.readTemperature();
+    currentData.airPressure = bmp.readPressure() / 100.0F;
+
+    Serial.print("Air Temperature : ");
+    Serial.print(currentData.airTemperature);
+    Serial.println(" °C");
+
+    Serial.print("Air Pressure : ");
+    Serial.print(currentData.airPressure);
+    Serial.println(" hPa");
+}
+void readHeartRateSpO2()
+{
+    static const byte RATE_SIZE = 4;
+
+    static byte rates[RATE_SIZE];
+    static byte rateSpot = 0;
+    static long lastBeat = 0;
+
+    long irValue = particleSensor.getIR();
+
+    if (irValue > 50000)
+    {
+        if (checkForBeat(irValue))
+        {
+            long delta = millis() - lastBeat;
+            lastBeat = millis();
+
+            float beatsPerMinute = 60.0 / (delta / 1000.0);
+
+            if (beatsPerMinute > 20 && beatsPerMinute < 255)
+            {
+                rates[rateSpot++] = (byte)beatsPerMinute;
+
+                rateSpot %= RATE_SIZE;
+
+                int beatAvg = 0;
+
+                for (byte i = 0; i < RATE_SIZE; i++)
+                {
+                    beatAvg += rates[i];
+                }
+
+                beatAvg /= RATE_SIZE;
+
+                currentData.heartRate = beatAvg;
+                currentData.spo2 =
+                    map(constrain(irValue, 50000, 120000),
+                        50000,
+                        120000,
+                        90,
+                        100);
+            }
+        }
+
+        Serial.print("Heart Rate : ");
+        Serial.println(currentData.heartRate);
+
+        Serial.print("SpO2 : ");
+        Serial.println(currentData.spo2);
+
+        Serial.print("IR Value : ");
+        Serial.println(irValue);
+    }
+    else
+    {
+        currentData.heartRate = NAN;
+        currentData.spo2 = NAN;
+        Serial.println("No Finger Detected");
+    }
+}
+bool checkForBeat(long irValue)
+{
+    static long threshold = 50000;
+    static bool positiveEdge = false;
+
+    if (irValue > threshold)
+    {
+        if (!positiveEdge)
+        {
+            positiveEdge = true;
+            return true;
+        }
+    }
+    else
+    {
+        positiveEdge = false;
+        threshold = irValue * 1.05;
+    }
+
+    return false;
+}
+bool isDataValid()
+{
+    if (isnan(currentData.airTemperature) ||
+        currentData.airTemperature < -20 ||
+        currentData.airTemperature > 60)
+    {
+        Serial.println("Invalid Air Temperature");
+        return false;
+    }
+    if (isnan(currentData.airPressure) ||
+        currentData.airPressure < 800 ||
+        currentData.airPressure > 1200)
+    {
+        Serial.println("Invalid Air Pressure");
+        return false;
+    }
+    if (isnan(currentData.heartRate))
+    {
+        Serial.println("No Heart Rate Data");
+        return false;
+    }
+
+    if (currentData.heartRate < 30 ||
+        currentData.heartRate > 200)
+    {
+        Serial.println("Invalid Heart Rate");
+        return false;
+    }
+    if (isnan(currentData.spo2))
+    {
+        Serial.println("No SpO2 Data");
+        return false;
+    }
+
+    if (currentData.spo2 < 70 ||
+        currentData.spo2 > 100)
+    {
+        Serial.println("Invalid SpO2");
+        return false;
+    }
+
+    return true;
+}
+bool uploadToFirebase()
+{
+    digitalWrite(STATUS_LED_PIN, HIGH);
+}

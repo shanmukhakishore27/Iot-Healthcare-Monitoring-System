@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Healthcare Monitoring System</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet"
+        href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>AI Healthcare Monitoring System</h1>
+            <p>IoT Based Smart Health Dashboard</p>
+        </header>
+        <section class="health-tip">
+            <div class="tip-icon">
+                <i class="fa-solid fa-droplet"></i>
+            </div>
+            <div class="tip-content">
+                <h2>Health Tip</h2>
+                <p id="tipText">
+                    Stay hydrated! Drink at least 8 glasses of water every day.
+                </p>
+            </div>
+        </section>
+        <section class="dashboard">
+            <div class="card">
+                <i class="fa-solid fa-heart icon heart"></i>
+                <h3>Heart Rate</h3>
+                <h2 id="heartRate">--</h2>
+                <span>BPM</span>
+            </div>
+            <div class="card">
+                <i class="fa-solid fa-lungs icon spo2"></i>
+                <h3>SpO₂</h3>
+                <h2 id="spo2">--</h2>
+                <span>%</span>
+            </div>
+            <div class="card">
+                <i class="fa-solid fa-temperature-half icon bodyTemp"></i>
+                <h3>Body Temperature</h3>
+                <h2 id="bodyTemp">--</h2>
+                <span>°F</span>
+            </div>
+            <div class="card">
+                <i class="fa-solid fa-cloud icon airTemp"></i>
+                <h3>Air Temperature</h3>
+                <h2 id="airTemp">--</h2>
+                <span>°C</span>
+            </div>
+            <div class="card">
+                <i class="fa-solid fa-gauge-high icon pressure"></i>
+                <h3>Air Pressure</h3>
+                <h2 id="pressure">--</h2>
+                <span>hPa</span>
+            </div>
+            <div class="card">
+                <i class="fa-solid fa-circle-check icon status"></i>
+                <h3>Device Status</h3>
+                <h2 id="status">Offline</h2>
+            </div>
+        </section>
+        <section class="analysis">
+            <h2>Health Analysis</h2>
+            <p id="analysisText">
+                Waiting for health data...
+            </p>
+        </section>
+        <footer>
+            <p>
+                <i class="fa-regular fa-clock"></i>
+                Last Updated :
+                <span id="lastUpdated">--</span>
+            </p>
+        </footer>
+    </div>
+    <!--
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+    -->
+    <script src="script.js"></script>
+</body>
+
+</html>
